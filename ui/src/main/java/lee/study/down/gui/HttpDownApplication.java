@@ -2,7 +2,15 @@ package lee.study.down.gui;
 
 import com.github.monkeywie.proxyee.crt.CertUtil;
 import com.sun.javafx.application.ParametersImpl;
+import java.awt.CheckboxMenuItem;
 import java.awt.Desktop;
+import java.awt.Menu;
+import java.awt.MenuItem;
+import java.awt.PopupMenu;
+import java.awt.SystemTray;
+import java.awt.Toolkit;
+import java.awt.TrayIcon;
+import java.awt.TrayIcon.MessageType;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
@@ -12,11 +20,6 @@ import java.security.KeyPair;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import dorkbox.systemTray.Menu;
-import dorkbox.systemTray.MenuItem;
-import dorkbox.systemTray.SystemTray;
-import dorkbox.systemTray.Separator;
-import dorkbox.util.JavaFX;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.geometry.HPos;
@@ -43,6 +46,7 @@ import javafx.stage.Modality;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
 import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
 import lee.study.down.HttpDownProxyServer;
 import lee.study.down.ca.HttpDownProxyCACertFactory;
 import lee.study.down.constant.HttpDownConstant;
@@ -75,6 +79,7 @@ public class HttpDownApplication extends Application {
   private float version;
   private Stage stage;
   private Browser browser;
+  private TrayIcon trayIcon;
 
   private static HttpDownProxyServer proxyServer;
 
@@ -147,7 +152,7 @@ public class HttpDownApplication extends Application {
     this.stage = stage;
     Platform.setImplicitExit(false);
     isSupportBrowser = isSupportBrowser();
-    Platform.runLater(this::addTray);
+    SwingUtilities.invokeLater(this::addTray);
     //webview加载
     if (ContentManager.CONFIG.get().getUiModel() == 1 && isSupportBrowser) {
       initBrowser();
@@ -235,14 +240,14 @@ public class HttpDownApplication extends Application {
             newTaskForm.setUnzip(true);
             try {
               ResultInfo resultInfo = HttpDownController.commonStartTask(newTaskForm);
-//              if (resultInfo.getStatus() == ResultStatus.SUCC.getCode()) {
-//                trayIcon.displayMessage("提示", "新任务【" + newTaskForm.getFileName() + "】开始自动下载", TrayIcon.MessageType.INFO);
-//              } else {
-//                trayIcon.displayMessage("提示", "自动下载失败：" + resultInfo.getMsg(), MessageType.ERROR);
-//              }
+              if (resultInfo.getStatus() == ResultStatus.SUCC.getCode()) {
+                trayIcon.displayMessage("提示", "新任务【" + newTaskForm.getFileName() + "】开始自动下载", TrayIcon.MessageType.INFO);
+              } else {
+                trayIcon.displayMessage("提示", "自动下载失败：" + resultInfo.getMsg(), MessageType.ERROR);
+              }
             } catch (Exception e) {
               LOGGER.error("auto start error", e);
-//              trayIcon.displayMessage("提示", "自动下载失败：" + e.getMessage(), MessageType.ERROR);
+              trayIcon.displayMessage("提示", "自动下载失败：" + e.getMessage(), MessageType.ERROR);
             }
           } else {
             if (configInfo.getUiModel() == 1) {
@@ -328,171 +333,155 @@ public class HttpDownApplication extends Application {
 
   private void addTray() {
     try {
-      if (OsUtil.isWindows()) {
-        SystemTray.DEBUG = true;
-        SystemTray.FORCE_TRAY_TYPE = SystemTray.TrayType.WindowsNotifyIcon;
-      }
-      // 获得系统托盘对象
-      SystemTray systemTray = SystemTray.get();
-      if (systemTray == null) {
-        throw new RuntimeException("Unable to load SystemTray!");
-      }
+      if (SystemTray.isSupported()) {
+        // 获得系统托盘对象
+        SystemTray systemTray = SystemTray.getSystemTray();
+        // 获取图片所在的URL
+        URL url = Thread.currentThread().getContextClassLoader().getResource("favicon.png");
+        trayIcon = new TrayIcon(Toolkit.getDefaultToolkit().getImage(url), "proxyee-down");
+        // 为系统托盘加托盘图标
+        systemTray.add(trayIcon);
+        trayIcon.setImageAutoSize(true);
+        // 托盘双击事件
+        trayIcon.addActionListener(event -> Platform.runLater(() -> open(true)));
+        // 创建弹出菜单
+        PopupMenu popupMenu = new PopupMenu();
+        MenuItem tasksItem = new MenuItem("显示");
+        tasksItem.addActionListener(event -> Platform.runLater(() -> open(true)));
 
-//      SystemTray.FORCE_TRAY_TYPE = SystemTray.TrayType.GtkStatusIcon;
-      // 获取图片所在的URL
-      URL url = Thread.currentThread().getContextClassLoader().getResource("favicon.png");
-
-      // 为系统托盘加托盘图标
-      assert url != null;
-      systemTray.setImage(url);
-      systemTray.setTooltip("proxyee-down");
-
-      // 创建弹出菜单
-      Menu popupMenu = systemTray.getMenu();
-      MenuItem tasksItem = new MenuItem("显示");
-      tasksItem.setCallback(event -> Platform.runLater(() -> open(true)));
-
-      MenuItem crtItem = new MenuItem("证书目录");
-      crtItem.setCallback(event -> {
-        try {
-          Desktop.getDesktop().open(new File(HttpDownConstant.SSL_PATH));
-        } catch (Exception e) {
-          LOGGER.error("open cert dir error", e);
-        }
-      });
-
-      Menu proxyMenu = new Menu("嗅探模式");
-      if (!OsUtil.isWindows() && !OsUtil.isMac()) {
-        proxyMenu.setEnabled(false);
-      } else {
-        CheckboxGroup proxyCheckboxGroup = new CheckboxGroup();
-        CheckboxItem globalProxyItem = new CheckboxItem("全网", proxyCheckboxGroup);
-
-        CheckboxItem bdyProxyItem = new CheckboxItem("百度云", proxyCheckboxGroup);
-
-        CheckboxItem disableProxyItem = new CheckboxItem("关闭", proxyCheckboxGroup);
-
-
-        globalProxyItem.setCallback(event -> {
+        MenuItem crtItem = new MenuItem("证书目录");
+        crtItem.addActionListener(event -> {
           try {
-            ContentManager.CONFIG.get().setSniffModel(1);
-            OsUtil.enabledHTTPProxy("127.0.0.1", ContentManager.CONFIG.get().getProxyPort());
-            ContentManager.CONFIG.save();
+            Desktop.getDesktop().open(new File(HttpDownConstant.SSL_PATH));
           } catch (Exception e) {
-            LOGGER.error("set global proxy error", e);
-          }
-        });
-        bdyProxyItem.setCallback(event -> {
-          try {
-            ContentManager.CONFIG.get().setSniffModel(2);
-            OsUtil.enabledPACProxy(
-                "http://127.0.0.1:" + ConfigUtil.getValue("tomcat.server.port")
-                    + "/res/pd.pac?t=" + System.currentTimeMillis());
-            ContentManager.CONFIG.save();
-          } catch (Exception e) {
-            LOGGER.error("set baidu yun proxy error", e);
-          }
-        });
-        disableProxyItem.setCallback(event -> {
-          try {
-            ContentManager.CONFIG.get().setSniffModel(3);
-            OsUtil.disabledProxy();
-            ContentManager.CONFIG.save();
-          } catch (Exception e) {
-            LOGGER.error("disable proxy error", e);
+            LOGGER.error("open cert dir error", e);
           }
         });
 
-        proxyMenu.add(globalProxyItem);
-        proxyMenu.add(bdyProxyItem);
-        proxyMenu.add(disableProxyItem);
-
-        //默认选中
-        if (ContentManager.CONFIG.get().getSniffModel() == 1) {
-          globalProxyItem.setChecked(true);
-        } else if (ContentManager.CONFIG.get().getSniffModel() == 2) {
-          bdyProxyItem.setChecked(true);
+        Menu proxyMenu = new Menu("嗅探模式");
+        if (!OsUtil.isWindows() && !OsUtil.isMac()) {
+          proxyMenu.setEnabled(false);
         } else {
-          disableProxyItem.setChecked(true);
-        }
-
-//      trayIcon.displayMessage("提示", "嗅探模式切换失败", TrayIcon.MessageType.INFO);
-
-      }
-
-      Menu uiMenu = new Menu("UI模式");
-      CheckboxGroup uiCheckboxGroup = new CheckboxGroup();
-      CheckboxItem guiItem = new CheckboxItem("GUI", uiCheckboxGroup);
-      CheckboxItem browserItem = new CheckboxItem("浏览器", uiCheckboxGroup);
-
-      if (isSupportBrowser) {
-        uiMenu.add(guiItem);
-      } else {
-        ContentManager.CONFIG.get().setUiModel(2);
-        ContentManager.CONFIG.save();
-      }
-      uiMenu.add(browserItem);
-
-      //默认选中
-      if (ContentManager.CONFIG.get().getUiModel() == 1) {
-        guiItem.setChecked(true);
-      } else {
-        browserItem.setChecked(true);
-      }
-      guiItem.setCallback(event -> Platform.runLater(() -> {
-        ContentManager.CONFIG.get().setUiModel(1);
-        initBrowser();
-        open(true);
-        ContentManager.CONFIG.save();
-      }));
-      browserItem.setCallback(event -> Platform.runLater(() -> {
-        ContentManager.CONFIG.get().setUiModel(2);
-        destroyBrowser();
-        stage.close();
-        open(true);
-        ContentManager.CONFIG.save();
-      }));
-
-      MenuItem aboutItem = new MenuItem("关于");
-      aboutItem.setCallback(event -> Platform.runLater(() -> {
-        if (ContentManager.CONFIG.get().getUiModel() == 1) {
-          browser.webEngine.executeScript("vue.$children[0].openTabHandle('/about');");
-        }
-        open(true);
-      }));
-
-      MenuItem closeItem = new MenuItem("退出");
-      closeItem.setCallback(event -> Platform.runLater(() -> {
-        //记录窗口信息
-        ContentManager.CONFIG.get().setGuiX(stage.getX());
-        ContentManager.CONFIG.get().setGuiY(stage.getY());
-        ContentManager.CONFIG.get().setGuiHeight(stage.getHeight());
-        ContentManager.CONFIG.get().setGuiWidth(stage.getWidth());
-        ContentManager.CONFIG.save();
-        systemTray.shutdown();
-
-        if (!JavaFX.isEventThread()) {
-          JavaFX.dispatch(() -> {
-            close();
-            Platform.exit();
+          CheckboxMenuItemGroup mig = new CheckboxMenuItemGroup();
+          CheckboxMenuItem globalProxyItem = new CheckboxMenuItem("全网");
+          globalProxyItem.setName("1");
+          CheckboxMenuItem bdyProxyItem = new CheckboxMenuItem("百度云");
+          bdyProxyItem.setName("2");
+          CheckboxMenuItem disableProxyItem = new CheckboxMenuItem("关闭");
+          disableProxyItem.setName("3");
+          proxyMenu.add(globalProxyItem);
+          proxyMenu.add(bdyProxyItem);
+          proxyMenu.add(disableProxyItem);
+          mig.add(globalProxyItem);
+          mig.add(bdyProxyItem);
+          mig.add(disableProxyItem);
+          try {
+            //默认选中
+            if (ContentManager.CONFIG.get().getSniffModel() == 1) {
+              mig.selectItem(globalProxyItem);
+              OsUtil.enabledHTTPProxy("127.0.0.1", ContentManager.CONFIG.get().getProxyPort());
+            } else if (ContentManager.CONFIG.get().getSniffModel() == 2) {
+              mig.selectItem(bdyProxyItem);
+              OsUtil.enabledPACProxy(
+                  "http://127.0.0.1:" + ConfigUtil.getValue("tomcat.server.port")
+                      + "/res/pd.pac?t=" + System.currentTimeMillis());
+            } else {
+              mig.selectItem(disableProxyItem);
+            }
+          } catch (Exception e) {
+            LOGGER.error("set proxy error", e);
+          }
+          mig.addActionListener(event -> {
+            try {
+              String selectedItemName = ((CheckboxMenuItem) event.getSource()).getName();
+              if ("1".equals(selectedItemName)) {
+                ContentManager.CONFIG.get().setSniffModel(1);
+                OsUtil.enabledHTTPProxy("127.0.0.1", ContentManager.CONFIG.get().getProxyPort());
+              } else if ("2".equals(selectedItemName)) {
+                ContentManager.CONFIG.get().setSniffModel(2);
+                OsUtil.enabledPACProxy(
+                    "http://127.0.0.1:" + ConfigUtil.getValue("tomcat.server.port")
+                        + "/res/pd.pac?t=" + System.currentTimeMillis());
+              } else {
+                ContentManager.CONFIG.get().setSniffModel(3);
+                OsUtil.disabledProxy();
+              }
+              ContentManager.CONFIG.save();
+            } catch (Exception e) {
+              LOGGER.error("proxy switch error", e);
+              trayIcon.displayMessage("提示", "嗅探模式切换失败", TrayIcon.MessageType.INFO);
+            }
           });
-        } else {
-          close();
-          Platform.exit();
         }
-        System.exit(0);
-      }));
 
-      popupMenu.add(tasksItem);
-      popupMenu.add(new Separator());
-      popupMenu.add(crtItem);
-      popupMenu.add(proxyMenu);
-      popupMenu.add(uiMenu);
-      popupMenu.add(new Separator());
-      popupMenu.add(aboutItem);
-      popupMenu.add(closeItem);
+        Menu uiMenu = new Menu("UI模式");
+        CheckboxMenuItemGroup mig = new CheckboxMenuItemGroup();
+        CheckboxMenuItem guiItem = new CheckboxMenuItem("GUI");
+        guiItem.setName("1");
+        CheckboxMenuItem browserItem = new CheckboxMenuItem("浏览器");
+        browserItem.setName("2");
+        if (isSupportBrowser) {
+          uiMenu.add(guiItem);
+        } else {
+          ContentManager.CONFIG.get().setUiModel(2);
+          ContentManager.CONFIG.save();
+        }
+        uiMenu.add(browserItem);
+        mig.add(guiItem);
+        mig.add(browserItem);
+        //默认选中
+        if (ContentManager.CONFIG.get().getUiModel() == 1) {
+          mig.selectItem(guiItem);
+        } else {
+          mig.selectItem(browserItem);
+        }
+        mig.addActionListener(event -> {
+          String selectedItemName = ((CheckboxMenuItem) event.getSource()).getName();
+          Platform.runLater(() -> {
+            if ("1".equals(selectedItemName)) {
+              ContentManager.CONFIG.get().setUiModel(1);
+              initBrowser();
+            } else {
+              ContentManager.CONFIG.get().setUiModel(2);
+              destroyBrowser();
+              stage.close();
+            }
+            open(true);
+            ContentManager.CONFIG.save();
+          });
+        });
 
-//      trayIcon.displayMessage("提示", "proxyee-down启动成功", TrayIcon.MessageType.INFO);
+        MenuItem aboutItem = new MenuItem("关于");
+        aboutItem.addActionListener(event -> Platform.runLater(() -> {
+          if (ContentManager.CONFIG.get().getUiModel() == 1) {
+            browser.webEngine.executeScript("vue.$children[0].openTabHandle('/about');");
+          }
+          open(true);
+        }));
+
+        MenuItem closeItem = new MenuItem("退出");
+        closeItem.addActionListener(event -> {
+          //记录窗口信息
+          ContentManager.CONFIG.get().setGuiX(stage.getX());
+          ContentManager.CONFIG.get().setGuiY(stage.getY());
+          ContentManager.CONFIG.get().setGuiHeight(stage.getHeight());
+          ContentManager.CONFIG.get().setGuiWidth(stage.getWidth());
+          ContentManager.CONFIG.save();
+          System.exit(0);
+        });
+
+        popupMenu.add(tasksItem);
+        popupMenu.addSeparator();
+        popupMenu.add(crtItem);
+        popupMenu.add(proxyMenu);
+        popupMenu.add(uiMenu);
+        popupMenu.addSeparator();
+        popupMenu.add(aboutItem);
+        popupMenu.add(closeItem);
+        // 为托盘图标加弹出菜弹
+        trayIcon.setPopupMenu(popupMenu);
+        trayIcon.displayMessage("提示", "proxyee-down启动成功", TrayIcon.MessageType.INFO);
+      }
     } catch (Exception e) {
       LOGGER.error("addTray error:", e);
       showMsg("托盘初始化失败");
